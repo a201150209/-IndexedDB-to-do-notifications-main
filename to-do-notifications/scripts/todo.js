@@ -3,7 +3,13 @@ window.onload = () => {
 
   // Hold an instance of a db object for us to store the IndexedDB data in
   let db;
-
+  const VERSION = 1 //change only version here
+  const OLD_VERSION = VERSION - 1
+  const PREV_OLD_VERSION = VERSION - 2
+  const NAME = 'toDoList'
+  const OBJECT_STORE = `${NAME}_${VERSION}`
+  const OLD_OBJECT_STORE = `${NAME}_${OLD_VERSION}`
+  const PREV_OLD_OBJECT_STORE = `${NAME}_${PREV_OLD_VERSION}`
   // Create a reference to the notifications list in the bottom of the app; we will write database messages into this list by
   // appending list items as children of this element
   const note = document.getElementById('notifications');
@@ -29,7 +35,7 @@ window.onload = () => {
   note.appendChild(createListItem('App initialised.'));
 
   // Let us open our database
-  const DBOpenRequest = window.indexedDB.open('toDoList', 4);
+  const DBOpenRequest = window.indexedDB.open(NAME, VERSION);
 
   // Register two event handlers to act on the database being opened successfully, or not
   DBOpenRequest.onerror = (event) => {
@@ -42,8 +48,41 @@ window.onload = () => {
     // Store the result of opening the database in the db variable. This is used a lot below
     db = DBOpenRequest.result;
 
+    if (db.objectStoreNames.contains(OLD_OBJECT_STORE)) {
+    
+      const oldObjectStore = db.transaction([OLD_OBJECT_STORE]).objectStore(OLD_OBJECT_STORE);
+      oldObjectStore.openCursor().onsuccess = (event) => {
+  
+        const cursor = event.target.result;
+
+        if (!cursor) {     
+          db.transaction([OLD_OBJECT_STORE], 'readwrite').objectStore(OLD_OBJECT_STORE).clear() 
+    
+          return;
+        }
+
+        
+        const newItem = [
+          { taskTitle: cursor.value.taskTitle, [`hours${VERSION}`]: cursor.value[`hours${OLD_VERSION}`], [`minutes${VERSION}`]: cursor.value[`hours${OLD_VERSION}`], [`day${VERSION}`]: cursor.value[`day${OLD_VERSION}`], [`month${VERSION}`]: cursor.value[`month${OLD_VERSION}`], [`year${VERSION}`]: cursor.value[`year${OLD_VERSION}`], [`notified${VERSION}`]: cursor.value[`notified${OLD_VERSION}`] },
+        ];
+
+        console.log(newItem)
+        const transaction = db.transaction([OBJECT_STORE], 'readwrite');
+
+        transaction.oncomplete = () => {
+          note.appendChild(createListItem('Transaction completed: database modification finished.'));
+        };
+        transaction.onerror = () => {
+          note.appendChild(createListItem(`Transaction not opened due to error: ${transaction.error}`));
+        };
+        const objectStore = transaction.objectStore(OBJECT_STORE);
+        objectStore.add(newItem[0]);
+        cursor.continue();
+      }
+    }
+
     // Run the displayData() function to populate the task list with all the to-do list data already in the IndexedDB
-    displayData();
+    setTimeout(displayData,100); // todo change logic
   };
 
   // This event handles the event whereby a new version of the database needs to be created
@@ -58,18 +97,24 @@ window.onload = () => {
     };
 
     // Create an objectStore for this database
-    const objectStore = db.createObjectStore('toDoList', { keyPath: 'taskTitle' });
+    if (!db.objectStoreNames.contains(OBJECT_STORE)) {
+      const objectStore = db.createObjectStore(OBJECT_STORE, { keyPath: 'taskTitle' });
 
-    // Define what data items the objectStore will contain
-    objectStore.createIndex('hours', 'hours', { unique: false });
-    objectStore.createIndex('minutes', 'minutes', { unique: false });
-    objectStore.createIndex('day', 'day', { unique: false });
-    objectStore.createIndex('month', 'month', { unique: false });
-    objectStore.createIndex('year', 'year', { unique: false });
+      // Define what data items the objectStore will contain
+      objectStore.createIndex(`hours${VERSION}`, `hours${VERSION}`, { unique: false });
+      objectStore.createIndex(`minutes${VERSION}`, `minutes${VERSION}`, { unique: false });
+      objectStore.createIndex(`day${VERSION}`, `day${VERSION}`, { unique: false });
+      objectStore.createIndex(`month${VERSION}`, `month${VERSION}`, { unique: false });
+      objectStore.createIndex(`year${VERSION}`, `year${VERSION}`, { unique: false });
+      objectStore.createIndex(`notified${VERSION}`, `notified${VERSION}`, { unique: false });
 
-    objectStore.createIndex('notified', 'notified', { unique: false });
+      note.appendChild(createListItem('Object store created.'));
+    }
 
-    note.appendChild(createListItem('Object store created.'));
+    if (db.objectStoreNames.contains(PREV_OLD_OBJECT_STORE)) {
+      db.deleteObjectStore(PREV_OLD_OBJECT_STORE);
+    }
+   
   };
 
   function displayData() {
@@ -80,7 +125,7 @@ window.onload = () => {
     }
 
     // Open our object store and then get a cursor list of all the different data items in the IDB to iterate through
-    const objectStore = db.transaction('toDoList').objectStore('toDoList');
+    const objectStore = db.transaction(OBJECT_STORE).objectStore(OBJECT_STORE);
     objectStore.openCursor().onsuccess = (event) => {
       const cursor = event.target.result;
       // Check if there are no (more) cursor items to iterate through
@@ -89,9 +134,18 @@ window.onload = () => {
         note.appendChild(createListItem('Entries all displayed.'));
         return;
       }
-      
+
       // Check which suffix the deadline day of the month needs
-      const { hours, minutes, day, month, year, notified, taskTitle } = cursor.value;
+      const {taskTitle } = cursor.value;
+      const hours = cursor.value[`hours${VERSION}`]
+      const minutes = cursor.value[`minutes${VERSION}`]
+      const day = cursor.value[`day${VERSION}`]
+      const month = cursor.value[`month${VERSION}`]
+      const year = cursor.value[`year${VERSION}`]
+      const notified = cursor.value[`notified${VERSION}`]
+      
+
+
       const ordDay = ordinal(day);
 
       // Build the to-do list entry and put it into the list item.
@@ -110,10 +164,10 @@ window.onload = () => {
       const deleteButton = document.createElement('button');
       listItem.appendChild(deleteButton);
       deleteButton.textContent = 'X';
-      
+
       // Set a data attribute on our delete button to associate the task it relates to.
       deleteButton.setAttribute('data-task', taskTitle);
-      
+
       // Associate action (deletion) when clicked
       deleteButton.onclick = (event) => {
         deleteItem(event);
@@ -137,14 +191,14 @@ window.onload = () => {
       note.appendChild(createListItem('Data not submitted — form incomplete.'));
       return;
     }
-    
+
     // Grab the values entered into the form fields and store them in an object ready for being inserted into the IndexedDB
     const newItem = [
-      { taskTitle: title.value, hours: hours.value, minutes: minutes.value, day: day.value, month: month.value, year: year.value, notified: 'no' },
+      { taskTitle: title.value, [`hours${VERSION}`]: hours.value, [`minutes${VERSION}`]: minutes.value, [`day${VERSION}`]: day.value, [`month${VERSION}`]: month.value, [`year${VERSION}`]: year.value, [`notified${VERSION}`]: 'no' },
     ];
 
     // Open a read/write DB transaction, ready for adding the data
-    const transaction = db.transaction(['toDoList'], 'readwrite');
+    const transaction = db.transaction([OBJECT_STORE], 'readwrite');
 
     // Report on the success of the transaction completing, when everything is done
     transaction.oncomplete = () => {
@@ -160,7 +214,7 @@ window.onload = () => {
     };
 
     // Call an object store that's already been added to the database
-    const objectStore = transaction.objectStore('toDoList');
+    const objectStore = transaction.objectStore(OBJECT_STORE);
     console.log(objectStore.indexNames);
     console.log(objectStore.keyPath);
     console.log(objectStore.name);
@@ -191,8 +245,8 @@ window.onload = () => {
     const dataTask = event.target.getAttribute('data-task');
 
     // Open a database transaction and delete the task, finding it by the name we retrieved above
-    const transaction = db.transaction(['toDoList'], 'readwrite');
-    transaction.objectStore('toDoList').delete(dataTask);
+    const transaction = db.transaction([OBJECT_STORE], 'readwrite');
+    transaction.objectStore(OBJECT_STORE).delete(dataTask);
 
     // Report that the data item has been deleted
     transaction.oncomplete = () => {
@@ -222,13 +276,20 @@ window.onload = () => {
     const yearCheck = now.getFullYear(); // Do not use getYear() that is deprecated.
 
     // Open a new transaction
-    const objectStore = db.transaction(['toDoList'], 'readwrite').objectStore('toDoList');
-    
+    const objectStore = db.transaction([OBJECT_STORE], 'readwrite').objectStore(OBJECT_STORE);
+
     // Open a cursor to iterate through all the data items in the IndexedDB
     objectStore.openCursor().onsuccess = (event) => {
       const cursor = event.target.result;
       if (!cursor) return;
-      const { hours, minutes, day, month, year, notified, taskTitle } = cursor.value;
+
+      const {taskTitle } = cursor.value;
+      const hours = cursor.value[`hours${VERSION}`]
+      const minutes = cursor.value[`minutes${VERSION}`]
+      const day = cursor.value[`day${VERSION}`]
+      const month = cursor.value[`month${VERSION}`]
+      const year = cursor.value[`year${VERSION}`]
+      const notified = cursor.value[`notified${VERSION}`]
 
       // convert the month names we have installed in the IDB into a month number that JavaScript will understand.
       // The JavaScript date object creates month values as a number between 0 and 11.
@@ -290,7 +351,7 @@ window.onload = () => {
   function checkNotificationPromise() {
     try {
       Notification.requestPermission().then();
-    } catch(e) {
+    } catch (e) {
       return false;
     }
 
@@ -317,7 +378,7 @@ window.onload = () => {
     // notification won't be set off on it again
 
     // First open up a transaction
-    const objectStore = db.transaction(['toDoList'], 'readwrite').objectStore('toDoList');
+    const objectStore = db.transaction([OBJECT_STORE], 'readwrite').objectStore(OBJECT_STORE);
 
     // Get the to-do list object that has this title as its title
     const objectStoreTitleRequest = objectStore.get(title);
